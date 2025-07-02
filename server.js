@@ -1,5 +1,27 @@
 require('dotenv').config();
 
+const swaggerUi = require('swagger-ui-express');
+const swaggerJSDoc = require('swagger-jsdoc');
+
+const swaggerDefinition = {
+  openapi: '3.0.0',
+  info: {
+    title: 'ZDA Funding Wallet API',
+    version: '1.0.0',
+    description: 'API for managing cards, milestones, and funding',
+  },
+  servers: [
+    { url: 'https://zdabe.onrender.com' }
+  ],
+};
+
+const options = {
+  swaggerDefinition,
+  apis: ['./server.js'], // We'll add swagger comments here
+};
+
+const swaggerSpec = swaggerJSDoc(options);
+
 const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
@@ -44,6 +66,30 @@ app.get('/', (req, res) => {
   res.send('ZDA Funding Wallet API v1 is running');
 });
 
+/**
+ * @swagger
+ * /api/v1/exchange-rate:
+ *   get:
+ *     summary: Get the current ZEC to USD exchange rate
+ *     responses:
+ *       200:
+ *         description: Exchange rate data
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 zec_to_usd:
+ *                   type: number
+ *                   description: The current exchange rate from ZEC to USD
+ *                   example: 72.55
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *                   description: Timestamp of the exchange rate
+ *                   example: "2025-07-01T12:00:00.000Z"
+ */
+
 app.get('/api/v1/exchange-rate', (req, res) => {
   res.set('Cache-Control', 'public, max-age=30');
   res.json({
@@ -51,6 +97,87 @@ app.get('/api/v1/exchange-rate', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+/**
+ * @swagger
+ * /api/v1/cards:
+ *   get:
+ *     summary: Get a list of cards with pagination and filters
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *         description: Page number (default 1)
+ *       - in: query
+ *         name: per_page
+ *         schema:
+ *           type: integer
+ *         description: Number of cards per page (default 10)
+ *       - in: query
+ *         name: priority
+ *         schema:
+ *           type: string
+ *         description: Filter by priority
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *         description: Filter by card status
+ *       - in: query
+ *         name: stage
+ *         schema:
+ *           type: string
+ *         description: Filter by card stage
+ *       - in: query
+ *         name: tags
+ *         schema:
+ *           type: string
+ *         description: Comma-separated list of tags
+ *     responses:
+ *       200:
+ *         description: A paginated list of cards
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 pagination:
+ *                   type: object
+ *                   properties:
+ *                     current_page:
+ *                       type: integer
+ *                     per_page:
+ *                       type: integer
+ *                     total_pages:
+ *                       type: integer
+ *                 cards:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: string
+ *                       title:
+ *                         type: string
+ *                       description:
+ *                         type: string
+ *                       status:
+ *                         type: string
+ *                       stage:
+ *                         type: string
+ *                       stage_funding:
+ *                         type: array
+ *                         items:
+ *                           type: object
+ *                           properties:
+ *                             stage:
+ *                               type: string
+ *                             funding_requested:
+ *                               type: string
+ *                       total_funding_requested:
+ *                         type: string
+ */
 
 app.get('/api/v1/cards', async (req, res) => {
   res.set('Cache-Control', 'public, max-age=30');
@@ -154,6 +281,97 @@ app.get('/api/v1/cards', async (req, res) => {
   }
 });
 
+
+/**
+ * @swagger
+ * /api/v1/cards/{id}:
+ *   get:
+ *     summary: Get details of a single card by ID
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: UUID of the card
+ *     responses:
+ *       200:
+ *         description: Card details
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 id:
+ *                   type: string
+ *                 title:
+ *                   type: string
+ *                 description:
+ *                   type: string
+ *                 creators:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 date:
+ *                   type: string
+ *                   format: date-time
+ *                 contributors:
+ *                   type: integer
+ *                 tags:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 priority:
+ *                   type: string
+ *                 funding_earned:
+ *                   type: string
+ *                 funding_spent:
+ *                   type: string
+ *                 funding_requested:
+ *                   type: string
+ *                 funding_received:
+ *                   type: string
+ *                 funding_available:
+ *                   type: string
+ *                 percent_funded:
+ *                   type: string
+ *                 visibility:
+ *                   type: string
+ *                 milestones:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                 status:
+ *                   type: string
+ *                 stage:
+ *                   type: string
+ *                 created_by:
+ *                   type: string
+ *                 owned_by:
+ *                   type: string
+ *                 last_updated:
+ *                   type: string
+ *                   format: date-time
+ *                 wallet_addresses:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 view_keys:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *       404:
+ *         description: Card not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: Not Found
+ */
+
 app.get('/api/v1/cards/:id', async (req, res) => {
   res.set('Cache-Control', 'public, max-age=30');
 
@@ -174,6 +392,45 @@ app.get('/api/v1/cards/:id', async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /api/v1/funding-summary:
+ *   get:
+ *     summary: Get aggregated funding summary across all public cards
+ *     responses:
+ *       200:
+ *         description: Aggregated funding data
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 total_earned:
+ *                   type: string
+ *                   description: Total funding earned
+ *                 total_spent:
+ *                   type: string
+ *                   description: Total funding spent
+ *                 total_requested:
+ *                   type: string
+ *                   description: Total funding requested
+ *                 total_received:
+ *                   type: string
+ *                   description: Total funding received
+ *                 total_available:
+ *                   type: string
+ *                   description: Total funding available
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: Internal server error
+ */
 
 app.get('/api/v1/funding-summary', async (req, res) => {
   res.set('Cache-Control', 'public, max-age=30');
@@ -194,6 +451,8 @@ app.get('/api/v1/funding-summary', async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 
 app.listen(PORT, () => {
