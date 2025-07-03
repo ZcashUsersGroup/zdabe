@@ -1,5 +1,61 @@
 require('dotenv').config();
 
+
+async function fetchAddressData(address) {
+  const url = `https://api.blockchair.com/zcash/dashboards/address/${address}?transactions=true`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+  const data = await response.json();
+  return data;
+}
+
+async function fetchWalletInfo(addresses) {
+  const results = [];
+  let total_balance = 0;
+  let total_received = 0;
+  let total_sent = 0;
+
+  for (const addr of addresses) {
+    try {
+      const data = await fetchAddressData(addr);
+      const info = data.data[addr].address;
+
+      const balance = info.balance / 1e8;
+      const received = info.received / 1e8;
+      const sent = info.sent / 1e8;
+      const transactions = data.data[addr].transactions.slice(0, 10);
+
+      total_balance += balance;
+      total_received += received;
+      total_sent += sent;
+
+      results.push({
+        address: addr,
+        balance,
+        total_received: received,
+        total_sent: sent,
+        transactions
+      });
+    } catch (error) {
+      results.push({
+        address: addr,
+        error: error.message
+      });
+    }
+  }
+
+  return {
+    addresses: results,
+    totals: {
+      balance: total_balance,
+      total_received: total_received,
+      total_sent: total_sent
+    }
+  };
+}
+
+
+
 const swaggerUi = require('swagger-ui-express');
 const swaggerJSDoc = require('swagger-jsdoc');
 
@@ -371,7 +427,6 @@ app.get('/api/v1/cards', async (req, res) => {
  *                   type: string
  *                   example: Not Found
  */
-
 app.get('/api/v1/cards/:id', async (req, res) => {
   res.set('Cache-Control', 'public, max-age=30');
 
@@ -385,13 +440,25 @@ app.get('/api/v1/cards/:id', async (req, res) => {
       return res.status(404).json({ error: 'Not Found' });
     }
 
-    res.json(result.rows[0]);
+    const card = result.rows[0];
+
+    if (card.wallet_addresses && card.wallet_addresses.length > 0) {
+      try {
+        const walletInfo = await fetchWalletInfo(card.wallet_addresses);
+        res.json({ ...card, wallet_info: walletInfo });
+      } catch (err) {
+        console.error('Error fetching wallet info:', err);
+        // Send card data anyway, with a note about wallet info failure
+        res.json({ ...card, wallet_info_error: 'Failed to retrieve wallet info' });
+      }
+    } else {
+      res.json(card);
+    }
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-
 /**
  * @swagger
  * /api/v1/funding-summary:
