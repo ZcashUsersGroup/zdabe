@@ -1,5 +1,8 @@
 require('dotenv').config();
 
+const cron = require('node-cron');
+const { setTimeout: delay } = require('node:timers/promises');
+const FUNDING_LOCK_KEY = 834911; // constant for advisory lock
 
 async function fetchAddressData(address) {
   const url = `https://api.blockchair.com/zcash/dashboards/address/${address}?transactions=true`;
@@ -54,7 +57,65 @@ async function fetchWalletInfo(addresses) {
   };
 }
 
+// ---- Scheduled funding updater (adds new functionality; leaves existing routes untouched) ----
+async function runFundingUpdater(pool, { dryRun = false } = {}) {
+  const client = await pool.connect();
+  const start = Date.now();
+  let updated = 0, failed = 0;
 
+  try {
+    const { rows } = await client.query('SELECT pg_try_advisory_lock($1) AS locked', [FUNDING_LOCK_KEY]);
+    if (!rows[0].locked) {
+      console.log('[funding-cron] Another updater is running; skipping.');
+      return { skipped: true };
+    }
+
+    const { rows: cards } = await client.query(`
+      SELECT id, wallet_addresses, funding_spent
+      FROM cards
+      WHERE visibility = 'PUBLIC'
+        AND wallet_addresses IS NOT NULL
+        AND array_length(wallet_addresses, 1) > 0
+    `);
+
+    console.log(`[funding-cron] Updating ${cards.length} card(s)...`);
+
+    for (const card of cards) {
+      try {
+        const walletInfo = await fetchWalletInfo(card.wallet_addresses);
+        const zecReceived = Number(walletInfo?.totals?.total_received || 0);
+        const spent = Number(card.funding_spent || 0);
+        const available = Number((zecReceived - spent).toFixed(8));
+
+        if (!dryRun) {
+          await client.query(`
+            UPDATE cards
+            SET funding_received = $1,
+                funding_available = $2,
+                last_updated = NOW()
+            WHERE id = $3
+          `, [zecReceived, available, card.id]);
+        }
+
+        updated++;
+        await delay(150); // light throttle for upstream API courtesy
+      } catch (e) {
+        failed++;
+        console.error('[funding-cron] Card update failed:', card.id, e.message);
+      }
+    }
+
+    const ms = Date.now() - start;
+    console.log(`[funding-cron] Done. Updated=${updated} Failed=${failed} in ${ms}ms`);
+    return { updated, failed, ms };
+  } catch (e) {
+    console.error('[funding-cron] Fatal error:', e);
+    throw e;
+  } finally {
+    try { await client.query('SELECT pg_advisory_unlock($1)', [FUNDING_LOCK_KEY]); } catch {}
+    client.release();
+  }
+}
 
 const swaggerUi = require('swagger-ui-express');
 const swaggerJSDoc = require('swagger-jsdoc');
@@ -92,9 +153,23 @@ const pool = new Pool({
   }
 });
 
-
 pool.connect()
-  .then(() => console.log('Connected to the database'))
+  .then(() => {
+    console.log('Connected to the database');
+
+    // Schedule: Twice per day at 03:15 and 15:15 Eastern Time
+    cron.schedule('15 3,15 * * *', async () => {
+      console.log('[funding-cron] Starting scheduled run…');
+      try {
+        await runFundingUpdater(pool);
+      } catch (e) {
+        // errors are logged inside runFundingUpdater
+      }
+    }, { timezone: 'America/New_York' });
+
+    // Optional: run once 30s after startup to avoid stale data on fresh deploys
+    setTimeout(() => runFundingUpdater(pool).catch(() => {}), 30_000);
+  })
   .catch(err => console.error('Database connection error:', err.stack));
 
 const app = express();
@@ -145,7 +220,6 @@ app.get('/', (req, res) => {
  *                   description: Timestamp of the exchange rate
  *                   example: "2025-07-01T12:00:00.000Z"
  */
-
 app.get('/api/v1/exchange-rate', (req, res) => {
   res.set('Cache-Control', 'public, max-age=30');
   res.json({
@@ -234,7 +308,6 @@ app.get('/api/v1/exchange-rate', (req, res) => {
  *                       total_funding_requested:
  *                         type: string
  */
-
 app.get('/api/v1/cards', async (req, res) => {
   res.set('Cache-Control', 'public, max-age=30');
 
@@ -305,23 +378,21 @@ app.get('/api/v1/cards', async (req, res) => {
         currency: row.currency || 'ZEC',
         note: row.note || null
       });
-
     }
 
     // Attach stage_funding and total_stage_funding_requested to each card
-  const cardsWithFunding = result.rows.map(card => {
-  const stageEntries = stageFundingMap[card.id] || [];
-  const totalRequested = stageEntries.reduce(
-    (sum, s) => sum + parseFloat(s.funding_requested || 0), 0
-  ).toFixed(8);
+    const cardsWithFunding = result.rows.map(card => {
+      const stageEntries = stageFundingMap[card.id] || [];
+      const totalRequested = stageEntries.reduce(
+        (sum, s) => sum + parseFloat(s.funding_requested || 0), 0
+      ).toFixed(8);
 
-  return {
-    ...card,
-    stage_funding: stageEntries,
-    total_funding_requested: totalRequested
-  };
-});
-
+      return {
+        ...card,
+        stage_funding: stageEntries,
+        total_funding_requested: totalRequested
+      };
+    });
 
     res.json({
       pagination: {
@@ -459,6 +530,7 @@ app.get('/api/v1/cards/:id', async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
 /**
  * @swagger
  * /api/v1/funding-summary:
@@ -498,7 +570,6 @@ app.get('/api/v1/cards/:id', async (req, res) => {
  *                   type: string
  *                   example: Internal server error
  */
-
 app.get('/api/v1/funding-summary', async (req, res) => {
   res.set('Cache-Control', 'public, max-age=30');
   try {
@@ -520,7 +591,6 @@ app.get('/api/v1/funding-summary', async (req, res) => {
 });
 
 app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
-
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
